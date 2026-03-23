@@ -1,11 +1,9 @@
 use serde::Serialize;
-use std::process::{Command as StdCmd, Stdio};
 use std::path::PathBuf;
+use std::process::{Command as StdCmd, Stdio};
 use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCmd;
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Clone)]
 pub struct EnvironmentStatus {
@@ -25,14 +23,10 @@ pub struct EnvironmentStatus {
 pub struct InstallProgressEvent {
     pub line: String,
     #[serde(rename = "type")]
-    pub kind: String, // "command" | "stdout" | "stderr" | "success" | "error"
+    pub kind: String,
 }
 
-// ── OS helpers ────────────────────────────────────────────────────────────────
-
-/// Run a command and return its trimmed stdout, or None if it fails.
 fn probe(prog: &str, args: &[&str]) -> Option<String> {
-    // On Windows, wrap in "cmd /c" so .cmd shims are resolved
     #[cfg(target_os = "windows")]
     let out = StdCmd::new("cmd")
         .arg("/c")
@@ -45,19 +39,20 @@ fn probe(prog: &str, args: &[&str]) -> Option<String> {
     let out = StdCmd::new(prog).args(args).output().ok()?;
 
     if out.status.success() {
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if s.is_empty() {
-            // Some tools write to stderr
-            let se = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            if !se.is_empty() { return Some(se); }
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !stdout.is_empty() {
+            return Some(stdout);
         }
-        Some(s)
-    } else {
-        None
+
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if !stderr.is_empty() {
+            return Some(stderr);
+        }
     }
+
+    None
 }
 
-/// Build the appropriate npm command for the current OS.
 #[cfg(target_os = "windows")]
 fn npm_cmd() -> TokioCmd {
     let mut c = TokioCmd::new("cmd");
@@ -70,22 +65,68 @@ fn npm_cmd() -> TokioCmd {
     TokioCmd::new("npm")
 }
 
-// ── Path detection ────────────────────────────────────────────────────────────
+#[cfg(target_os = "windows")]
+fn normalize_openclaw_path(path: PathBuf) -> PathBuf {
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"))
+        .unwrap_or(false)
+    {
+        return path;
+    }
 
-/// Returns the path of the openclaw binary if resolvable.
+    let cmd_variant = PathBuf::from(format!("{}.cmd", path.to_string_lossy()));
+    if cmd_variant.exists() {
+        return cmd_variant;
+    }
+
+    let bat_variant = PathBuf::from(format!("{}.bat", path.to_string_lossy()));
+    if bat_variant.exists() {
+        return bat_variant;
+    }
+
+    path
+}
+
+#[cfg(not(target_os = "windows"))]
+fn normalize_openclaw_path(path: PathBuf) -> PathBuf {
+    path
+}
+
+fn probe_openclaw(path: &str) -> Option<String> {
+    probe(path, &["--version"])
+}
+
+pub fn resolve_valid_openclaw_path(path: &str) -> Option<String> {
+    let normalized = normalize_openclaw_path(PathBuf::from(path));
+    let normalized_str = normalized.to_string_lossy().to_string();
+    if normalized_str.is_empty() {
+        return None;
+    }
+    if !normalized.exists() {
+        return None;
+    }
+    if probe_openclaw(&normalized_str).is_some() {
+        return Some(normalized_str);
+    }
+    None
+}
+
 pub fn detect_openclaw_path() -> Option<String> {
-    // 1. System PATH lookup – prefer .cmd shim on Windows
     #[cfg(target_os = "windows")]
     if let Ok(out) = StdCmd::new("cmd").args(["/c", "where", "openclaw"]).output() {
         if out.status.success() {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            // `where` may return multiple lines; prefer the .cmd entry
-            let cmd_line = stdout.lines()
-                .find(|l| l.to_lowercase().ends_with(".cmd"))
+            let selected = stdout
+                .lines()
+                .find(|line| line.to_lowercase().ends_with(".cmd"))
                 .or_else(|| stdout.lines().next());
-            if let Some(p) = cmd_line {
-                let p = p.trim().to_string();
-                if !p.is_empty() { return Some(p); }
+
+            if let Some(line) = selected {
+                if let Some(validated) = resolve_valid_openclaw_path(line.trim()) {
+                    return Some(validated);
+                }
             }
         }
     }
@@ -93,47 +134,64 @@ pub fn detect_openclaw_path() -> Option<String> {
     #[cfg(not(target_os = "windows"))]
     if let Ok(out) = StdCmd::new("which").arg("openclaw").output() {
         if out.status.success() {
-            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !p.is_empty() { return Some(p); }
-        }
-    }
-
-    // 2. npm global bin directory
-    #[cfg(target_os = "windows")]
-    let npm_bin_out = StdCmd::new("cmd").args(["/c", "npm", "bin", "-g"]).output().ok();
-    #[cfg(not(target_os = "windows"))]
-    let npm_bin_out = StdCmd::new("npm").args(["bin", "-g"]).output().ok();
-
-    if let Some(out) = npm_bin_out {
-        if out.status.success() {
-            let bin_dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
-
-            #[cfg(target_os = "windows")]
-            let candidate = PathBuf::from(&bin_dir).join("openclaw.cmd");
-            #[cfg(not(target_os = "windows"))]
-            let candidate = PathBuf::from(&bin_dir).join("openclaw");
-
-            if candidate.exists() {
-                return Some(candidate.to_string_lossy().to_string());
+            let candidate = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !candidate.is_empty() && probe_openclaw(&candidate).is_some() {
+                return Some(candidate);
             }
         }
     }
 
-    // 3. Fallback – rely on PATH at runtime
-    Some("openclaw".to_string())
-}
+    #[cfg(target_os = "windows")]
+    {
+        let mut candidates = Vec::new();
 
-// ── Commands ──────────────────────────────────────────────────────────────────
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let npm_dir = PathBuf::from(appdata).join("npm");
+            candidates.push(npm_dir.join("openclaw.cmd"));
+            candidates.push(npm_dir.join("openclaw"));
+        }
+
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            let npm_dir = PathBuf::from(profile)
+                .join("AppData")
+                .join("Roaming")
+                .join("npm");
+            candidates.push(npm_dir.join("openclaw.cmd"));
+            candidates.push(npm_dir.join("openclaw"));
+        }
+
+        for candidate in candidates {
+            if let Some(validated) = resolve_valid_openclaw_path(&candidate.to_string_lossy()) {
+                return Some(validated);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for candidate in ["/usr/local/bin/openclaw", "/usr/bin/openclaw"] {
+            let candidate_str = candidate.to_string();
+            if probe_openclaw(&candidate_str).is_some() {
+                return Some(candidate_str);
+            }
+        }
+    }
+
+    if probe_openclaw("openclaw").is_some() {
+        return Some("openclaw".to_string());
+    }
+
+    None
+}
 
 #[tauri::command]
 pub fn check_environment() -> EnvironmentStatus {
     let node_version = probe("node", &["--version"]);
-    let openclaw_version = probe("openclaw", &["--version"]);
-    let openclaw_path = if openclaw_version.is_some() {
-        detect_openclaw_path()
-    } else {
-        None
-    };
+    let openclaw_path = detect_openclaw_path();
+    let openclaw_version = openclaw_path
+        .as_deref()
+        .and_then(probe_openclaw)
+        .or_else(|| probe_openclaw("openclaw"));
 
     EnvironmentStatus {
         node_installed: node_version.is_some(),
@@ -147,13 +205,16 @@ pub fn check_environment() -> EnvironmentStatus {
 #[tauri::command]
 pub async fn install_openclaw(app: tauri::AppHandle) -> Result<String, String> {
     let emit = |line: &str, kind: &str| {
-        let _ = app.emit("install_progress", InstallProgressEvent {
-            line: line.to_string(),
-            kind: kind.to_string(),
-        });
+        let _ = app.emit(
+            "install_progress",
+            InstallProgressEvent {
+                line: line.to_string(),
+                kind: kind.to_string(),
+            },
+        );
     };
 
-    emit("▸ npm install -g openclaw", "command");
+    emit("npm install -g openclaw", "command");
 
     let mut child = npm_cmd()
         .args(["install", "-g", "openclaw"])
@@ -162,30 +223,34 @@ pub async fn install_openclaw(app: tauri::AppHandle) -> Result<String, String> {
         .spawn()
         .map_err(|e| format!("npm konnte nicht gestartet werden: {}", e))?;
 
-    // Stream stdout in background task
     if let Some(stdout) = child.stdout.take() {
-        let a = app.clone();
+        let app_handle = app.clone();
         let mut lines = BufReader::new(stdout).lines();
         tauri::async_runtime::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = a.emit("install_progress", InstallProgressEvent {
-                    line,
-                    kind: "stdout".into(),
-                });
+                let _ = app_handle.emit(
+                    "install_progress",
+                    InstallProgressEvent {
+                        line,
+                        kind: "stdout".into(),
+                    },
+                );
             }
         });
     }
 
-    // Stream stderr in background task
     if let Some(stderr) = child.stderr.take() {
-        let a = app.clone();
+        let app_handle = app.clone();
         let mut lines = BufReader::new(stderr).lines();
         tauri::async_runtime::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = a.emit("install_progress", InstallProgressEvent {
-                    line,
-                    kind: "stderr".into(),
-                });
+                let _ = app_handle.emit(
+                    "install_progress",
+                    InstallProgressEvent {
+                        line,
+                        kind: "stderr".into(),
+                    },
+                );
             }
         });
     }
@@ -195,20 +260,32 @@ pub async fn install_openclaw(app: tauri::AppHandle) -> Result<String, String> {
     if !status.success() {
         let code = status.code().unwrap_or(-1);
         emit(
-            &format!("✗ Installation fehlgeschlagen (exit code {})", code),
+            &format!("Installation fehlgeschlagen (exit code {})", code),
             "error",
         );
-        return Err(format!("npm install fehlgeschlagen (exit {})", code));
+        return Err(format!(
+            "npm install -g openclaw ist fehlgeschlagen (Exit-Code {}). Pruefe Node/npm-Rechte oder installiere OpenClaw manuell und trage danach den Pfad ein.",
+            code
+        ));
     }
 
-    let path = detect_openclaw_path().unwrap_or_else(|| "openclaw".to_string());
-    emit(&format!("✓ openclaw installiert: {}", path), "success");
+    let path = detect_openclaw_path().ok_or_else(|| {
+        "OpenClaw wurde installiert, aber danach nicht automatisch gefunden. Nutze 'Pfad angeben' und waehle z.B. C:\\Users\\<Name>\\AppData\\Roaming\\npm\\openclaw.cmd".to_string()
+    })?;
+
+    emit(&format!("openclaw installiert: {}", path), "success");
     Ok(path)
 }
 
 #[tauri::command]
 pub fn validate_openclaw_path(path: String) -> Result<String, String> {
-    let version = probe(&path, &["--version"])
-        .ok_or_else(|| format!("'{}' antwortet nicht – ist das der richtige Pfad?", path))?;
+    let normalized = normalize_openclaw_path(PathBuf::from(path.trim()));
+    let normalized_str = normalized.to_string_lossy().to_string();
+    let version = probe_openclaw(&normalized_str).ok_or_else(|| {
+        format!(
+            "'{}' antwortet nicht als OpenClaw-Binary. Auf Windows ist oft die .cmd-Datei korrekt, z.B. C:\\Users\\<Name>\\AppData\\Roaming\\npm\\openclaw.cmd",
+            normalized_str
+        )
+    })?;
     Ok(version)
 }

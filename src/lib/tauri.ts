@@ -32,3 +32,9 @@ export async function installOpenClaw(): Promise<string> {
 export async function validateOpenClawPath(path: string): Promise<string> {
   return invoke<string>("validate_openclaw_path", { path });
 }
+
+export async function launchOpenClawAssistant(
+  action: "onboard" | "configure" | "channels_login" | "dashboard",
+): Promise<string> {
+  return invoke<string>("launch_openclaw_assistant", { action });
+}

@@ -1,6 +1,17 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ShieldCheck, FolderOpen, Globe, AppWindow, ArrowRight, Clock, Settings } from "lucide-react";
+import {
+  AppWindow,
+  AlertTriangle,
+  ArrowRight,
+  Clock,
+  FolderLock,
+  FolderOpen,
+  Globe,
+  Lock,
+  ShieldCheck,
+  Wifi,
+} from "lucide-react";
 import { useConfigStore } from "../store/configStore";
 import { useAuditStore } from "../store/auditStore";
 import { useSessionStore } from "../store/sessionStore";
@@ -22,7 +33,17 @@ function Card({ children, style }: { children: React.ReactNode; style?: React.CS
   );
 }
 
-function StatBox({ count, label, icon: Icon, color }: { count: number; label: string; icon: React.ElementType; color: string }) {
+function StatBox({
+  count,
+  label,
+  icon: Icon,
+  color,
+}: {
+  count: number;
+  label: string;
+  icon: React.ElementType;
+  color: string;
+}) {
   return (
     <div
       style={{
@@ -47,26 +68,49 @@ function StatBox({ count, label, icon: Icon, color }: { count: number; label: st
   );
 }
 
+function ProtectionBadge({ active, label, icon: Icon }: { active: boolean; label: string; icon: React.ElementType }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 10px",
+        borderRadius: 8,
+        background: active ? "#F0FDF4" : "#F8FAFC",
+        border: `1px solid ${active ? "#BBF7D0" : "#E2E8F0"}`,
+        fontSize: 12,
+        color: active ? "#15803D" : "#64748B",
+        fontWeight: 600,
+      }}
+    >
+      <Icon size={14} color={active ? "#16A34A" : "#94A3B8"} />
+      {label}
+    </div>
+  );
+}
+
 export function Dashboard() {
   const navigate = useNavigate();
-  const { config } = useConfigStore();
+  const { config, fetchConfig } = useConfigStore();
   const { events, fetchEvents } = useAuditStore();
   const { status: sessionStatus, fetchStatus } = useSessionStore();
 
   useEffect(() => {
+    fetchConfig();
     fetchEvents();
     fetchStatus();
-  }, [fetchEvents, fetchStatus]);
+  }, [fetchConfig, fetchEvents, fetchStatus]);
 
   const recentEvents = events.slice(0, 5);
   const isActive = sessionStatus.running;
+  const openclawReady = Boolean(sessionStatus.openclawPath);
 
-  return (
+   return (
     <div style={{ maxWidth: 860 }}>
-      {/* Header */}
       <div style={{ marginBottom: 28 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: 0 }}>Übersicht</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: 0 }}>Uebersicht</h1>
           <SessionStatusBadge active={isActive} />
         </div>
         <p style={{ fontSize: 14, color: "#64748B", margin: 0 }}>
@@ -74,34 +118,33 @@ export function Dashboard() {
         </p>
       </div>
 
-      {/* Setup banner – only shown when OpenClaw is not configured */}
-      {!config.openclawPath && (
+      {!openclawReady && (
         <div
           style={{
             display: "flex",
-            alignItems: "center",
+            alignItems: "flex-start",
             gap: 12,
-            padding: "12px 16px",
-            background: "#EEF2FF",
-            border: "1px solid #C7D2FE",
+            padding: "14px 16px",
+            background: "#FEF2F2",
+            border: "1px solid #FECACA",
             borderRadius: 10,
             marginBottom: 20,
           }}
         >
-          <Settings size={18} color="#4F46E5" style={{ flexShrink: 0 }} />
+          <AlertTriangle size={18} color="#DC2626" style={{ flexShrink: 0, marginTop: 1 }} />
           <div style={{ flex: 1 }}>
-            <p style={{ fontSize: 13, fontWeight: 600, color: "#3730A3", margin: 0 }}>
-              OpenClaw ist noch nicht eingerichtet
+            <p style={{ fontSize: 13, fontWeight: 700, color: "#991B1B", margin: 0 }}>
+              OpenClaw ist nicht installiert oder nicht mehr erreichbar
             </p>
-            <p style={{ fontSize: 12, color: "#4F46E5", margin: 0 }}>
-              Installiere OpenClaw, bevor du eine Session starten kannst.
+            <p style={{ fontSize: 12, color: "#991B1B", margin: "3px 0 0" }}>
+              Installiere OpenClaw zuerst in CrabCage, bevor du eine Session startest.
             </p>
           </div>
           <button
             onClick={() => navigate("/session")}
             style={{
               padding: "7px 14px",
-              background: "#4F46E5",
+              background: "#DC2626",
               color: "white",
               border: "none",
               borderRadius: 7,
@@ -111,26 +154,22 @@ export function Dashboard() {
               whiteSpace: "nowrap",
             }}
           >
-            Jetzt einrichten →
+            Jetzt installieren {"->"}
           </button>
         </div>
       )}
 
-      {/* Stats */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
         <StatBox count={config.allowedApps.length} label="Erlaubte Apps" icon={AppWindow} color="#4F46E5" />
         <StatBox count={config.allowedPaths.length} label="Erlaubte Ordner" icon={FolderOpen} color="#16A34A" />
         <StatBox count={config.allowedDomains.length} label="Erlaubte Domains" icon={Globe} color="#0EA5E9" />
       </div>
 
-      {/* Security status card */}
       <Card style={{ marginBottom: 20, borderLeft: "4px solid #4F46E5" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <ShieldCheck size={22} color="#4F46E5" />
           <div style={{ flex: 1 }}>
-            <p style={{ fontSize: 15, fontWeight: 600, color: "#0F172A", margin: 0 }}>
-              Sicherheitsmodus: Default-Deny
-            </p>
+            <p style={{ fontSize: 15, fontWeight: 600, color: "#0F172A", margin: 0 }}>Sicherheitsmodus: Default-Deny</p>
             <p style={{ fontSize: 13, color: "#64748B", margin: 0, marginTop: 2 }}>
               Alles, was nicht explizit erlaubt ist, wird automatisch blockiert.
             </p>
@@ -156,26 +195,40 @@ export function Dashboard() {
         </div>
       </Card>
 
-      {/* Recent activity */}
+      <Card style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 600, color: "#0F172A", margin: 0 }}>Aktive Schutzebenen</h2>
+          <button
+            onClick={() => navigate("/session")}
+            style={{ background: "none", border: "none", fontSize: 13, color: "#4F46E5", cursor: "pointer", fontWeight: 500 }}
+          >
+            Session oeffnen {"->"}
+          </button>
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <ProtectionBadge active={sessionStatus.networkProtectionActive} label="Netzwerk" icon={Wifi} />
+          <ProtectionBadge active={sessionStatus.processProtectionActive} label="Prozesse" icon={Lock} />
+          <ProtectionBadge active={sessionStatus.filesystemProtectionActive} label="Dateisystem" icon={FolderLock} />
+        </div>
+      </Card>
+
       <Card>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Clock size={16} color="#64748B" />
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#0F172A", margin: 0 }}>
-              Letzte Aktivitäten
-            </h2>
+            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#0F172A", margin: 0 }}>Letzte Aktivitaeten</h2>
           </div>
           <button
             onClick={() => navigate("/activity")}
             style={{ background: "none", border: "none", fontSize: 13, color: "#4F46E5", cursor: "pointer", fontWeight: 500 }}
           >
-            Alle anzeigen →
+            Alle anzeigen {"->"}
           </button>
         </div>
 
         {recentEvents.length === 0 ? (
           <p style={{ fontSize: 14, color: "#94A3B8", textAlign: "center", padding: "16px 0" }}>
-            Noch keine Aktivitäten aufgezeichnet.
+            Noch keine Aktivitaeten aufgezeichnet.
           </p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -193,9 +246,7 @@ export function Dashboard() {
                 }}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ fontSize: 13, fontWeight: 500, color: "#0F172A", margin: 0 }}>
-                    {event.action}
-                  </p>
+                  <p style={{ fontSize: 13, fontWeight: 500, color: "#0F172A", margin: 0 }}>{event.action}</p>
                   <p
                     style={{
                       fontSize: 12,

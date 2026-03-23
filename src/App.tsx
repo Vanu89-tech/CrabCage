@@ -6,6 +6,7 @@ import { Dashboard } from "./routes/Dashboard";
 import { Permissions } from "./routes/Permissions";
 import { ActivityLog } from "./routes/ActivityLog";
 import { SessionControl } from "./routes/SessionControl";
+import { AssistantSetup } from "./routes/AssistantSetup";
 import { useConfigStore } from "./store/configStore";
 
 function AppRoutes() {
@@ -26,7 +27,7 @@ function AppRoutes() {
           justifyContent: "center",
         }}
       >
-        <div style={{ color: "#475569", fontSize: 14 }}>CrabCage wird geladen …</div>
+        <div style={{ color: "#475569", fontSize: 14 }}>CrabCage wird geladen...</div>
       </div>
     );
   }
@@ -47,6 +48,7 @@ function AppRoutes() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/permissions" element={<Permissions />} />
         <Route path="/activity" element={<ActivityLog />} />
+        <Route path="/assistant" element={<AssistantSetup />} />
         <Route path="/session" element={<SessionControl />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

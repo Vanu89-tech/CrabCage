@@ -27,16 +27,11 @@ export function ActivityLog() {
       <div style={{ marginBottom: 28 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
           <ScrollText size={20} color="#4F46E5" />
-          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: 0 }}>
-            Aktivitätsprotokoll
-          </h1>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: 0 }}>Aktivitätsprotokoll</h1>
         </div>
-        <p style={{ fontSize: 14, color: "#64748B", margin: 0 }}>
-          Jede Aktion von OpenClaw wird hier aufgezeichnet.
-        </p>
+        <p style={{ fontSize: 14, color: "#64748B", margin: 0 }}>Jede Aktion von OpenClaw wird hier aufgezeichnet.</p>
       </div>
 
-      {/* Legend */}
       <div
         style={{
           display: "flex",
@@ -55,7 +50,6 @@ export function ActivityLog() {
         <StatusBadge result="confirmed" />
       </div>
 
-      {/* Event list */}
       <div
         style={{
           background: "white",
@@ -80,18 +74,14 @@ export function ActivityLog() {
                 borderBottom: idx < events.length - 1 ? "1px solid #F1F5F9" : "none",
               }}
             >
-              {/* Timestamp */}
               <div style={{ minWidth: 140 }}>
                 <p style={{ fontSize: 12, color: "#94A3B8", margin: 0, fontFamily: "monospace" }}>
                   {formatTime(event.timestamp)}
                 </p>
               </div>
 
-              {/* Action + resource */}
               <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontSize: 13, fontWeight: 500, color: "#0F172A", margin: 0 }}>
-                  {event.action}
-                </p>
+                <p style={{ fontSize: 13, fontWeight: 500, color: "#0F172A", margin: 0 }}>{event.action}</p>
                 <p
                   style={{
                     fontSize: 12,
@@ -105,14 +95,9 @@ export function ActivityLog() {
                 >
                   {event.resource}
                 </p>
-                {event.details && (
-                  <p style={{ fontSize: 11, color: "#94A3B8", margin: 0, marginTop: 2 }}>
-                    {event.details}
-                  </p>
-                )}
+                {event.details && <p style={{ fontSize: 11, color: "#94A3B8", margin: 0, marginTop: 2 }}>{event.details}</p>}
               </div>
 
-              {/* Status */}
               <StatusBadge result={event.result} />
             </div>
           ))

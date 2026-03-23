@@ -28,15 +28,10 @@ export function Permissions() {
   return (
     <div style={{ maxWidth: 720 }}>
       <div style={{ marginBottom: 28 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: "0 0 6px" }}>
-          Berechtigungen
-        </h1>
-        <p style={{ fontSize: 14, color: "#64748B", margin: 0 }}>
-          Alles, was hier nicht steht, ist für OpenClaw gesperrt.
-        </p>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: "0 0 6px" }}>Berechtigungen</h1>
+        <p style={{ fontSize: 14, color: "#64748B", margin: 0 }}>Alles, was hier nicht steht, ist für OpenClaw gesperrt.</p>
       </div>
 
-      {/* Tabs */}
       <div
         style={{
           display: "flex",
@@ -78,7 +73,6 @@ export function Permissions() {
         })}
       </div>
 
-      {/* Content */}
       <div
         style={{
           background: "white",
@@ -89,10 +83,7 @@ export function Permissions() {
       >
         {activeTab === "apps" && (
           <>
-            <SectionHeader
-              title="Erlaubte Programme"
-              description="OpenClaw darf nur diese Anwendungen starten oder ansprechen."
-            />
+            <SectionHeader title="Erlaubte Programme" description="OpenClaw darf nur diese Anwendungen starten oder ansprechen." />
             <div style={{ marginBottom: 16 }}>
               <AddItemInput
                 placeholder="z.B. notepad.exe oder /usr/bin/code"
@@ -115,7 +106,7 @@ export function Permissions() {
             />
             <div style={{ marginBottom: 16 }}>
               <AddItemInput
-                placeholder="z.B. C:\Dokumente\Projekt oder ~/Downloads"
+                placeholder={"z.B. C:\\Dokumente\\Projekt oder ~/Downloads"}
                 onAdd={(value) => addPath({ path: value, permissions: ["read"] })}
               />
             </div>
@@ -133,10 +124,7 @@ export function Permissions() {
 
         {activeTab === "domains" && (
           <>
-            <SectionHeader
-              title="Erlaubte Websites"
-              description="OpenClaw darf nur diese Domains im Browser öffnen oder aufrufen."
-            />
+            <SectionHeader title="Erlaubte Websites" description="OpenClaw darf nur diese Domains im Browser öffnen oder aufrufen." />
             <div style={{ marginBottom: 16 }}>
               <AddItemInput
                 placeholder="z.B. wikipedia.org oder docs.python.org"
@@ -152,7 +140,6 @@ export function Permissions() {
         )}
       </div>
 
-      {/* Info box */}
       <div
         style={{
           marginTop: 16,
@@ -167,10 +154,8 @@ export function Permissions() {
           alignItems: "flex-start",
         }}
       >
-        <span style={{ flexShrink: 0 }}>ℹ️</span>
-        <span>
-          Änderungen werden sofort lokal gespeichert. Sie gelten ab der nächsten OpenClaw-Session.
-        </span>
+        <span style={{ flexShrink: 0, fontWeight: 700 }}>i</span>
+        <span>Änderungen werden sofort lokal gespeichert. Sie gelten ab der nächsten OpenClaw-Session.</span>
       </div>
     </div>
   );

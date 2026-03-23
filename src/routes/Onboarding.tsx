@@ -8,7 +8,7 @@ const steps = [
     icon: ShieldCheck,
     iconColor: "#4F46E5",
     title: "Willkommen bei CrabCage",
-    text: "Du entscheidest, worauf OpenClaw zugreifen darf. Standardmäßig ist alles gesperrt – bis du es ausdrücklich erlaubst.",
+    text: "Du entscheidest, worauf OpenClaw zugreifen darf. Standardmäßig ist alles gesperrt - bis du es ausdrücklich erlaubst.",
     note: null,
   },
   {
@@ -66,7 +66,6 @@ export function Onboarding() {
           textAlign: "center",
         }}
       >
-        {/* Icon */}
         <div
           style={{
             width: 64,
@@ -82,17 +81,10 @@ export function Onboarding() {
           <Icon size={32} color={current.iconColor} />
         </div>
 
-        {/* Title */}
-        <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: "0 0 12px" }}>
-          {current.title}
-        </h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0F172A", margin: "0 0 12px" }}>{current.title}</h1>
 
-        {/* Text */}
-        <p style={{ fontSize: 15, color: "#475569", lineHeight: 1.6, margin: "0 0 16px" }}>
-          {current.text}
-        </p>
+        <p style={{ fontSize: 15, color: "#475569", lineHeight: 1.6, margin: "0 0 16px" }}>{current.text}</p>
 
-        {/* Note */}
         {current.note && (
           <div
             style={{
@@ -109,7 +101,6 @@ export function Onboarding() {
           </div>
         )}
 
-        {/* Step dots */}
         <div style={{ display: "flex", justifyContent: "center", gap: 6, marginBottom: 28 }}>
           {steps.map((_, i) => (
             <div
@@ -125,7 +116,6 @@ export function Onboarding() {
           ))}
         </div>
 
-        {/* Button */}
         <button
           onClick={handleNext}
           style={{

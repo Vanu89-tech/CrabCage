@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
-  CheckCircle, XCircle, Download, FolderOpen,
-  Loader, ChevronRight, AlertTriangle,
+  AlertTriangle,
+  CheckCircle,
+  ChevronRight,
+  Download,
+  FolderOpen,
+  Loader,
+  XCircle,
 } from "lucide-react";
 import { checkEnvironment, installOpenClaw, validateOpenClawPath } from "../../lib/tauri";
 import { useConfigStore } from "../../store/configStore";
@@ -49,6 +54,30 @@ function StatusRow({ label, ok, detail }: StatusRowProps) {
   );
 }
 
+function formatTauriError(error: unknown): string {
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object") {
+    const maybeMessage = Reflect.get(error, "message");
+    if (typeof maybeMessage === "string") {
+      return maybeMessage;
+    }
+
+    const maybeCause = Reflect.get(error, "cause");
+    if (typeof maybeCause === "string") {
+      return maybeCause;
+    }
+  }
+
+  return "Unbekannter Fehler bei der OpenClaw-Einrichtung.";
+}
+
 interface Props {
   onDone?: (path: string) => void;
 }
@@ -64,7 +93,6 @@ export function OpenClawSetup({ onDone }: Props) {
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const { setOpenclawPath } = useConfigStore();
 
-  // Auto-scroll terminal output
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -76,30 +104,32 @@ export function OpenClawSetup({ onDone }: Props) {
       .then((status) => {
         setEnv(status);
         if (status.openclawInstalled && status.openclawPath) {
-          // Already installed – save path and finish
           setOpenclawPath(status.openclawPath).then(() => {
             onDone?.(status.openclawPath!);
             setPhase("done");
           });
-        } else {
-          setPhase("idle");
+          return;
         }
+
+        setPhase("idle");
       })
-      .catch(() => setPhase("idle"));
+      .catch((err) => {
+        setError(formatTauriError(err));
+        setPhase("idle");
+      });
 
     return () => {
       unlistenRef.current?.();
     };
-  }, []);
+  }, [onDone, setOpenclawPath]);
 
   const handleInstall = async () => {
     setPhase("installing");
     setLines([]);
     setError(null);
 
-    // Subscribe to streaming progress
-    unlistenRef.current = await listen<InstallProgressEvent>("install_progress", (e) => {
-      setLines((prev) => [...prev, e.payload]);
+    unlistenRef.current = await listen<InstallProgressEvent>("install_progress", (event) => {
+      setLines((prev) => [...prev, event.payload]);
     });
 
     try {
@@ -107,8 +137,8 @@ export function OpenClawSetup({ onDone }: Props) {
       await setOpenclawPath(path);
       setPhase("done");
       onDone?.(path);
-    } catch (e) {
-      setError(e as string);
+    } catch (err) {
+      setError(formatTauriError(err));
       setPhase("idle");
     } finally {
       unlistenRef.current?.();
@@ -117,16 +147,21 @@ export function OpenClawSetup({ onDone }: Props) {
   };
 
   const handleValidateManual = async () => {
-    if (!manualPath.trim()) return;
+    const trimmed = manualPath.trim();
+    if (!trimmed) {
+      return;
+    }
+
     setValidating(true);
     setError(null);
+
     try {
-      await validateOpenClawPath(manualPath.trim());
-      await setOpenclawPath(manualPath.trim());
+      await validateOpenClawPath(trimmed);
+      await setOpenclawPath(trimmed);
       setPhase("done");
-      onDone?.(manualPath.trim());
-    } catch (e) {
-      setError(e as string);
+      onDone?.(trimmed);
+    } catch (err) {
+      setError(formatTauriError(err));
     } finally {
       setValidating(false);
     }
@@ -140,7 +175,6 @@ export function OpenClawSetup({ onDone }: Props) {
     error: "#FCA5A5",
   };
 
-  // ── Done ──────────────────────────────────────────────────────────────────
   if (phase === "done") {
     return (
       <div
@@ -159,7 +193,7 @@ export function OpenClawSetup({ onDone }: Props) {
           <p style={{ fontSize: 14, fontWeight: 600, color: "#15803D", margin: 0 }}>
             OpenClaw ist eingerichtet
           </p>
-          <p style={{ fontSize: 12, color: "#16A34A", margin: 0, marginTop: 2 }}>
+          <p style={{ fontSize: 12, color: "#16A34A", margin: "2px 0 0" }}>
             Du kannst jetzt eine Session starten.
           </p>
         </div>
@@ -176,7 +210,6 @@ export function OpenClawSetup({ onDone }: Props) {
         overflow: "hidden",
       }}
     >
-      {/* Header */}
       <div
         style={{
           padding: "16px 20px",
@@ -198,7 +231,6 @@ export function OpenClawSetup({ onDone }: Props) {
       </div>
 
       <div style={{ padding: "16px 20px" }}>
-        {/* Environment check */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
           <StatusRow
             label="Node.js"
@@ -212,7 +244,6 @@ export function OpenClawSetup({ onDone }: Props) {
           />
         </div>
 
-        {/* Node.js missing warning */}
         {phase !== "checking" && !env?.nodeInstalled && (
           <div
             style={{
@@ -236,13 +267,12 @@ export function OpenClawSetup({ onDone }: Props) {
                 rel="noreferrer"
                 style={{ color: "#D97706", fontWeight: 600 }}
               >
-                nodejs.org →
+                nodejs.org {"->"}
               </a>
             </span>
           </div>
         )}
 
-        {/* Action buttons (idle) */}
         {phase === "idle" && env?.nodeInstalled && (
           <div style={{ display: "flex", gap: 8, marginBottom: lines.length ? 12 : 0 }}>
             <button
@@ -267,7 +297,11 @@ export function OpenClawSetup({ onDone }: Props) {
               openclaw installieren
             </button>
             <button
-              onClick={() => setPhase("manual")}
+              onClick={() => {
+                setManualPath(env?.openclawPath ?? manualPath);
+                setPhase("manual");
+                setError(null);
+              }}
               style={{
                 flex: 1,
                 padding: "10px 16px",
@@ -290,19 +324,18 @@ export function OpenClawSetup({ onDone }: Props) {
           </div>
         )}
 
-        {/* Manual path input */}
         {phase === "manual" && (
           <div style={{ marginBottom: 12 }}>
             <p style={{ fontSize: 12, color: "#64748B", margin: "0 0 8px" }}>
-              Gib den vollständigen Pfad zu deiner openclaw-Installation ein:
+              Gib den vollstaendigen Pfad zu deiner openclaw-Installation ein:
             </p>
             <div style={{ display: "flex", gap: 8 }}>
               <input
                 type="text"
                 value={manualPath}
-                onChange={(e) => setManualPath(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleValidateManual()}
-                placeholder="z.B. /usr/local/bin/openclaw oder openclaw"
+                onChange={(event) => setManualPath(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && handleValidateManual()}
+                placeholder="z.B. C:\\Users\\<Name>\\AppData\\Roaming\\npm\\openclaw.cmd"
                 autoFocus
                 style={{
                   flex: 1,
@@ -335,11 +368,17 @@ export function OpenClawSetup({ onDone }: Props) {
                 }}
               >
                 {validating ? <Loader size={14} /> : <ChevronRight size={14} />}
-                Prüfen
+                Pruefen
               </button>
             </div>
+            <p style={{ fontSize: 12, color: "#94A3B8", margin: "8px 0 0" }}>
+              Unter Windows ist meist die Datei mit der Endung <code>.cmd</code> korrekt.
+            </p>
             <button
-              onClick={() => { setPhase("idle"); setError(null); }}
+              onClick={() => {
+                setPhase("idle");
+                setError(null);
+              }}
               style={{
                 marginTop: 6,
                 background: "none",
@@ -350,12 +389,11 @@ export function OpenClawSetup({ onDone }: Props) {
                 padding: 0,
               }}
             >
-              ← zurück
+              {"<-"} zurueck
             </button>
           </div>
         )}
 
-        {/* Install progress terminal */}
         {(phase === "installing" || lines.length > 0) && (
           <div
             ref={logRef}
@@ -371,21 +409,18 @@ export function OpenClawSetup({ onDone }: Props) {
               marginBottom: 8,
             }}
           >
-            {lines.length === 0 && (
-              <span style={{ color: "#475569" }}>Warte auf npm…</span>
-            )}
-            {lines.map((l, i) => (
-              <div key={i} style={{ color: lineColor[l.type] ?? "#E2E8F0" }}>
-                {l.line}
+            {lines.length === 0 && <span style={{ color: "#475569" }}>Warte auf npm...</span>}
+            {lines.map((line, index) => (
+              <div key={index} style={{ color: lineColor[line.type] ?? "#E2E8F0" }}>
+                {line.line}
               </div>
             ))}
             {phase === "installing" && (
-              <span style={{ color: "#475569", animation: "pulse 1s infinite" }}>▌</span>
+              <span style={{ color: "#475569", animation: "pulse 1s infinite" }}>|</span>
             )}
           </div>
         )}
 
-        {/* Error */}
         {error && (
           <div
             style={{
@@ -396,6 +431,7 @@ export function OpenClawSetup({ onDone }: Props) {
               fontSize: 13,
               color: "#991B1B",
               marginTop: 8,
+              whiteSpace: "pre-wrap",
             }}
           >
             {error}

@@ -6,9 +6,10 @@ import { useAuditStore } from "./auditStore";
 export interface SessionStatus {
   running: boolean;
   pid: number | null;
-  proxyActive: boolean;
+  networkProtectionActive: boolean;
   openclawPath: string | null;
-  sandboxActive: boolean;
+  processProtectionActive: boolean;
+  filesystemProtectionActive: boolean;
 }
 
 export interface ProxyEventPayload {
@@ -33,10 +34,30 @@ interface SessionStore {
 const defaultStatus: SessionStatus = {
   running: false,
   pid: null,
-  proxyActive: false,
+  networkProtectionActive: false,
   openclawPath: null,
-  sandboxActive: false,
+  processProtectionActive: false,
+  filesystemProtectionActive: false,
 };
+
+function formatSessionError(error: unknown): string {
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object") {
+    const maybeMessage = Reflect.get(error, "message");
+    if (typeof maybeMessage === "string") {
+      return maybeMessage;
+    }
+  }
+
+  return "Unbekannter Fehler beim Steuern der OpenClaw-Session.";
+}
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
   status: defaultStatus,
@@ -48,7 +69,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     try {
       const status = await invoke<SessionStatus>("get_session_status");
       set({ status });
-    } catch {
+    } catch (error) {
+      console.error("Session status failed", error);
       set({ status: defaultStatus });
     }
   },
@@ -60,8 +82,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       set({ status });
       // Start listening to proxy events once session is live
       await get().subscribeToProxyEvents();
-    } catch (e) {
-      set({ error: e as string });
+    } catch (error) {
+      console.error("Session start failed", error);
+      set({ error: formatSessionError(error) });
     } finally {
       set({ loading: false });
     }
@@ -73,8 +96,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       const status = await invoke<SessionStatus>("stop_session");
       set({ status });
       get().unsubscribeFromProxyEvents();
-    } catch (e) {
-      set({ error: e as string });
+    } catch (error) {
+      console.error("Session stop failed", error);
+      set({ error: formatSessionError(error) });
     } finally {
       set({ loading: false });
     }

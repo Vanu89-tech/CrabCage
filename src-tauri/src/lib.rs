@@ -6,7 +6,8 @@ mod setup;
 
 use proxy::{ProxyHandle, ProxyEvent, start_proxy};
 use launcher::find_openclaw;
-use sandbox::{SandboxHandle, launch_sandboxed};
+use sandbox::{AllowedPathRule, SandboxHandle, launch_sandboxed};
+use setup::resolve_valid_openclaw_path;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -83,12 +84,14 @@ pub struct AuditEvent {
 pub struct SessionStatus {
     pub running: bool,
     pub pid: Option<u32>,
-    #[serde(rename = "proxyActive")]
-    pub proxy_active: bool,
+    #[serde(rename = "networkProtectionActive")]
+    pub network_protection_active: bool,
     #[serde(rename = "openclawPath")]
     pub openclaw_path: Option<String>,
-    #[serde(rename = "sandboxActive")]
-    pub sandbox_active: bool,
+    #[serde(rename = "processProtectionActive")]
+    pub process_protection_active: bool,
+    #[serde(rename = "filesystemProtectionActive")]
+    pub filesystem_protection_active: bool,
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -111,9 +114,122 @@ fn data_dir() -> PathBuf {
 
 fn config_path() -> PathBuf { data_dir().join("config.json") }
 fn events_path() -> PathBuf { data_dir().join("events.json") }
+fn debug_log_path() -> PathBuf { data_dir().join("session-debug.log") }
 
 fn ensure_data_dir() -> Result<(), String> {
     fs::create_dir_all(data_dir()).map_err(|e| e.to_string())
+}
+
+fn debug_log(message: impl AsRef<str>) {
+    let _ = ensure_data_dir();
+    let line = format!("{}\n", message.as_ref());
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(debug_log_path())
+        .and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()));
+}
+
+fn detect_node_executable() -> Option<String> {
+    if let Ok(out) = std::process::Command::new("cmd").args(["/c", "where", "node"]).output() {
+        if out.status.success() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if let Some(path) = stdout.lines().map(str::trim).find(|line| !line.is_empty()) {
+                return Some(path.to_string());
+            }
+        }
+    }
+
+    let common_paths = [
+        r"C:\Program Files\nodejs\node.exe",
+        r"C:\Program Files (x86)\nodejs\node.exe",
+    ];
+
+    for path in common_paths {
+        if std::path::Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+
+    None
+}
+
+struct LaunchCommand {
+    executable: String,
+    args: Vec<String>,
+}
+
+fn resolve_openclaw_launch_command(path: &str) -> LaunchCommand {
+    let path_lc = path.to_lowercase();
+
+    let needs_shell = path_lc.ends_with(".cmd")
+        || path_lc.ends_with(".bat")
+        || (!path_lc.ends_with(".exe") && {
+            let cmd_sibling = format!("{}.cmd", path);
+            std::path::Path::new(&cmd_sibling).exists()
+        });
+
+    if !needs_shell {
+        return LaunchCommand {
+            executable: path.to_string(),
+            args: vec![],
+        };
+    }
+
+    let target = if !path_lc.ends_with(".cmd") && !path_lc.ends_with(".bat") {
+        format!("{}.cmd", path)
+    } else {
+        path.to_string()
+    };
+
+    let shim_path = std::path::Path::new(&target);
+    if let Some(shim_dir) = shim_path.parent() {
+        let script_path = shim_dir.join("node_modules").join("openclaw").join("openclaw.mjs");
+        if script_path.exists() {
+            let node_in_shim_dir = shim_dir.join("node.exe");
+            let node_cmd = if node_in_shim_dir.exists() {
+                node_in_shim_dir.to_string_lossy().to_string()
+            } else if let Some(node_path) = detect_node_executable() {
+                node_path
+            } else {
+                "node".to_string()
+            };
+
+            return LaunchCommand {
+                executable: node_cmd,
+                args: vec![script_path.to_string_lossy().to_string()],
+            };
+        }
+    }
+
+    let sysroot = std::env::var("SystemRoot")
+        .unwrap_or_else(|_| r"C:\Windows".to_string());
+    LaunchCommand {
+        executable: format!("{}\\System32\\cmd.exe", sysroot),
+        args: vec!["/c".to_string(), target],
+    }
+}
+
+fn session_launch_args() -> Vec<String> {
+    vec!["gateway".to_string(), "run".to_string()]
+}
+
+fn resolve_openclaw_shell_target(path: &str) -> String {
+    let path_lc = path.to_lowercase();
+    if path_lc.ends_with(".cmd") || path_lc.ends_with(".bat") {
+        return path.to_string();
+    }
+
+    let cmd_sibling = format!("{}.cmd", path);
+    if std::path::Path::new(&cmd_sibling).exists() {
+        return cmd_sibling;
+    }
+
+    path.to_string()
+}
+
+fn quote_for_cmd(arg: &str) -> String {
+    format!("\"{}\"", arg.replace('"', "\"\""))
 }
 
 // ── Config commands ───────────────────────────────────────────────────────────
@@ -180,18 +296,32 @@ fn add_audit_event(event: AuditEvent) -> Result<(), String> {
 async fn get_session_status(state: tauri::State<'_, AppState>) -> Result<SessionStatus, String> {
     let session_guard = state.session.lock().await;
     let proxy_guard = state.proxy.lock().await;
+    let config = load_config().unwrap_or_default();
 
-    let (running, pid, sandbox_active) = match session_guard.as_ref() {
-        Some(s) => (s.is_running(), Some(s.pid), s.sandbox_active),
-        None => (false, None, false),
+    let (running, pid, process_protection_active, filesystem_protection_active) =
+        match session_guard.as_ref() {
+            Some(s) => (
+                s.is_running(),
+                Some(s.pid),
+                s.sandbox_active,
+                s.filesystem_hardening_active,
+            ),
+            None => (false, None, false, false),
     };
+
+    let openclaw_path = config
+        .openclaw_path
+        .as_deref()
+        .and_then(resolve_valid_openclaw_path)
+        .or_else(find_openclaw);
 
     Ok(SessionStatus {
         running,
         pid,
-        proxy_active: proxy_guard.is_some(),
-        openclaw_path: None,
-        sandbox_active,
+        network_protection_active: proxy_guard.is_some(),
+        openclaw_path,
+        process_protection_active,
+        filesystem_protection_active,
     })
 }
 
@@ -200,8 +330,15 @@ async fn start_session(
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<SessionStatus, String> {
+    debug_log("start_session: begin");
     // Load current config
     let config = load_config()?;
+    debug_log(format!(
+        "start_session: config loaded apps={} paths={} domains={}",
+        config.allowed_apps.len(),
+        config.allowed_paths.len(),
+        config.allowed_domains.len()
+    ));
 
     // Sync domain whitelist
     {
@@ -214,6 +351,7 @@ async fn start_session(
     {
         let mut proxy_guard = state.proxy.lock().await;
         if proxy_guard.is_none() {
+            debug_log("start_session: starting proxy");
             let (tx, mut rx) = mpsc::channel::<ProxyEvent>(128);
 
             // Forward proxy events to the frontend via Tauri events
@@ -226,30 +364,53 @@ async fn start_session(
 
             let proxy = start_proxy(state.allowed_domains.clone(), tx).await?;
             *proxy_guard = Some(proxy);
+            debug_log("start_session: proxy started");
         }
     }
 
     // Resolve OpenClaw path
-    let openclaw_path = config.openclaw_path
+    let openclaw_path = config
+        .openclaw_path
         .as_deref()
-        .map(str::to_string)
+        .and_then(resolve_valid_openclaw_path)
         .or_else(find_openclaw);
+    debug_log(format!("start_session: openclaw_path={:?}", openclaw_path));
 
     // Build allowed executables from config
     let allowed_executables: Vec<String> = config.allowed_apps
         .iter()
         .map(|a| a.path.clone())
         .collect();
+    let allowed_paths: Vec<AllowedPathRule> = config
+        .allowed_paths
+        .iter()
+        .map(|path| AllowedPathRule {
+            path: path.path.clone(),
+            writable: path.permissions.iter().any(|permission| permission == "write"),
+        })
+        .collect();
+    debug_log(format!(
+        "start_session: allowed_executables={} allowed_paths={}",
+        allowed_executables.len(),
+        allowed_paths.len()
+    ));
 
     // Launch OpenClaw inside sandbox
-    let (running, pid, sandbox_active) = match &openclaw_path {
+    let (running, pid, process_protection_active, filesystem_protection_active) =
+        match &openclaw_path {
         Some(path) => {
             let mut session_guard = state.session.lock().await;
             if session_guard.as_ref().map(|s| s.is_running()).unwrap_or(false) {
                 let s = session_guard.as_ref().unwrap();
-                (true, Some(s.pid), s.sandbox_active)
+                (
+                    true,
+                    Some(s.pid),
+                    s.sandbox_active,
+                    s.filesystem_hardening_active,
+                )
             } else {
                 let proxy_url = format!("http://127.0.0.1:{}", proxy::PROXY_PORT);
+                debug_log(format!("start_session: launching with proxy_url={}", proxy_url));
                 let env_pairs = vec![
                     ("HTTP_PROXY".into(),  proxy_url.clone()),
                     ("HTTPS_PROXY".into(), proxy_url.clone()),
@@ -259,49 +420,52 @@ async fn start_session(
                     ("CRABCAGE_ACTIVE".into(), "1".into()),
                     ("CRABCAGE_PROXY_PORT".into(), proxy::PROXY_PORT.to_string()),
                 ];
-                // .cmd/.bat files (and extensionless npm shims) can't be launched
-                // directly by CreateProcessW – wrap with the full cmd.exe path.
-                let path_lc = path.to_lowercase();
-                let needs_shell = path_lc.ends_with(".cmd")
-                    || path_lc.ends_with(".bat")
-                    || (!path_lc.ends_with(".exe") && {
-                        // Extensionless? Check if a .cmd sibling exists (npm shim)
-                        let cmd_sibling = format!("{}.cmd", path);
-                        std::path::Path::new(&cmd_sibling).exists()
-                    });
-                let launch_cmd = if needs_shell {
-                    let sysroot = std::env::var("SystemRoot")
-                        .unwrap_or_else(|_| r"C:\Windows".to_string());
-                    // If extensionless, use the .cmd sibling directly
-                    let target = if !path_lc.ends_with(".cmd") && !path_lc.ends_with(".bat") {
-                        format!("{}.cmd", path)
-                    } else {
-                        path.clone()
-                    };
-                    format!("\"{}\\System32\\cmd.exe\" /c \"{}\"", sysroot, target)
-                } else {
-                    path.clone()
-                };
-                match launch_sandboxed(&launch_cmd, env_pairs, allowed_executables) {
+                let mut launch_cmd = resolve_openclaw_launch_command(path);
+                launch_cmd.args.extend(session_launch_args());
+                debug_log(format!(
+                    "start_session: launch executable={} args={:?}",
+                    launch_cmd.executable,
+                    launch_cmd.args
+                ));
+                match launch_sandboxed(
+                    &launch_cmd.executable,
+                    launch_cmd.args,
+                    env_pairs,
+                    allowed_executables,
+                    allowed_paths,
+                ) {
                     Ok(handle) => {
+                        debug_log(format!("start_session: launch ok pid={}", handle.pid));
                         let pid = handle.pid;
-                        let active = handle.sandbox_active;
+                        let process_active = handle.sandbox_active;
+                        let filesystem_active = handle.filesystem_hardening_active;
                         *session_guard = Some(handle);
-                        (true, Some(pid), active)
+                        (true, Some(pid), process_active, filesystem_active)
                     }
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        debug_log(format!("start_session: launch error={}", e));
+                        return Err(e);
+                    }
                 }
             }
         }
-        None => (false, None, false),
+        None => (false, None, false, false),
     };
+    debug_log(format!(
+        "start_session: completed running={} pid={:?} network=true process={} filesystem={}",
+        running,
+        pid,
+        process_protection_active,
+        filesystem_protection_active
+    ));
 
     Ok(SessionStatus {
         running,
         pid,
-        proxy_active: true,
+        network_protection_active: true,
         openclaw_path,
-        sandbox_active,
+        process_protection_active,
+        filesystem_protection_active,
     })
 }
 
@@ -326,15 +490,58 @@ async fn stop_session(state: tauri::State<'_, AppState>) -> Result<SessionStatus
     Ok(SessionStatus {
         running: false,
         pid: None,
-        proxy_active: false,
+        network_protection_active: false,
         openclaw_path: None,
-        sandbox_active: false,
+        process_protection_active: false,
+        filesystem_protection_active: false,
     })
 }
 
 #[tauri::command]
 fn detect_openclaw() -> Option<String> {
     find_openclaw()
+}
+
+#[tauri::command]
+fn launch_openclaw_assistant(action: String) -> Result<String, String> {
+    let path = load_config()
+        .ok()
+        .and_then(|config| config.openclaw_path)
+        .as_deref()
+        .and_then(resolve_valid_openclaw_path)
+        .or_else(find_openclaw)
+        .ok_or_else(|| "OpenClaw wurde nicht gefunden. Richte OpenClaw zuerst in CrabCage ein.".to_string())?;
+
+    let (args, label) = match action.as_str() {
+        "onboard" => (vec!["onboard".to_string()], "Onboarding"),
+        "configure" => (vec!["configure".to_string()], "Konfiguration"),
+        "channels_login" => (vec!["channels".to_string(), "login".to_string()], "Channel Login"),
+        "dashboard" => (vec!["dashboard".to_string()], "Dashboard"),
+        _ => return Err("Unbekannte Assistant-Aktion.".to_string()),
+    };
+
+    let shell_target = resolve_openclaw_shell_target(&path);
+    let mut command_parts = vec![quote_for_cmd(&shell_target)];
+    command_parts.extend(args.iter().map(|arg| quote_for_cmd(arg)));
+    let command_line = command_parts.join(" ");
+
+    let status = std::process::Command::new("cmd")
+        .args([
+            "/c",
+            "start",
+            "OpenClaw Assistant",
+            "cmd",
+            "/k",
+            &command_line,
+        ])
+        .status()
+        .map_err(|e| format!("Assistant-Terminal konnte nicht gestartet werden: {}", e))?;
+
+    if !status.success() {
+        return Err(format!("Assistant-Terminal für '{}' konnte nicht gestartet werden.", label));
+    }
+
+    Ok(format!("OpenClaw {} wurde in einem neuen Terminal gestartet.", label))
 }
 
 // ── App entry point ───────────────────────────────────────────────────────────
@@ -359,6 +566,7 @@ pub fn run() {
             start_session,
             stop_session,
             detect_openclaw,
+            launch_openclaw_assistant,
             setup::check_environment,
             setup::install_openclaw,
             setup::validate_openclaw_path,
